@@ -6,8 +6,12 @@ SECRET_KEY = 'django-insecure--6+!&*xfc6^4m!z2qu2j$0vee@if3e%ygv4uh@jrz+kingl*m@
 
 DEBUG = True
 
-ALLOWED_HOSTS = ["*"]
-
+ALLOWED_HOSTS = [
+    "usuf.softclub.win",
+    "31.25.238.184",
+    "127.0.0.1",
+    "localhost"
+]
 # ── Apps ──────────────────────────────────────────────────────────────────────
 INSTALLED_APPS = [
     "daphne",
