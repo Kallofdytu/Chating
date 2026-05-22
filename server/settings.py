@@ -1,18 +1,15 @@
 from pathlib import Path
+import os 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = 'django-insecure--6+!&*xfc6^4m!z2qu2j$0vee@if3e%ygv4uh@jrz+kingl*m@'
 
-DEBUG = True
+DEBUG = False
 
-ALLOWED_HOSTS = [
-    "usuf.softclub.win",
-    "31.25.238.184",
-    "127.0.0.1",
-    "localhost"
-]
-# ── Apps ──────────────────────────────────────────────────────────────────────
+
+ALLOWED_HOSTS = ['usufwoo.softclub.win', '31.25.238.184', 'localhost']
+#-----Apps ──────────────────────────────────────────────────────────────────────
 INSTALLED_APPS = [
     "daphne",
     "channels",
@@ -116,6 +113,7 @@ USE_I18N       = True
 USE_TZ         = True
 
 # ── Static ─────────────────────────────────────────────────────────────────────
-STATIC_URL = "/static/"
+STATIC_URL = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'static/')
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

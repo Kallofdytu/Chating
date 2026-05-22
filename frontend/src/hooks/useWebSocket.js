@@ -6,7 +6,7 @@ export default function useWebSocket(userId, onMessage) {
   useEffect(() => {
     if (!userId) return
     const token = localStorage.getItem('access_token') || ''
-    const ws = new WebSocket(`ws://${location.host}/ws/chat/${userId}/?token=${token}`)
+    const ws = new WebSocket(`wss://${location.host}/ws/chat/${userId}/?token=${token}`)
     socketRef.current = ws
     ws.onmessage = e => onMessage(JSON.parse(e.data))
     ws.onopen  = () => console.log('WS connected')

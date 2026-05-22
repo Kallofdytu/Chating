@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import api from '../api/auth'
 import useWebSocket from '../hooks/useWebSocket'
+import useWebRTC from '../hooks/useWebRTC'
 
 const COLORS = ['#6c63ff','#f59e0b','#10b981','#ef4444','#3b82f6','#ec4899','#8b5cf6']
 function userColor(name) { let h=0; for(const c of name||'') h=(h*31+c.charCodeAt(0))%COLORS.length; return COLORS[h] }
@@ -32,13 +33,13 @@ export default function Chat() {
   const currentId  = Number(localStorage.getItem('user_id'))
   const token      = localStorage.getItem('access_token')
 
-  const [messages,    setMessages]    = useState([])
-  const [otherUser,   setOtherUser]   = useState(null)
-  const [text,        setText]        = useState('')
-  const [typing,      setTyping]      = useState(false)
-  const [connected,   setConnected]   = useState(false)
-  const [recording,   setRecording]   = useState(false)
-  const [preview,     setPreview]     = useState(null)
+  const [messages,  setMessages]  = useState([])
+  const [otherUser, setOtherUser] = useState(null)
+  const [text,      setText]      = useState('')
+  const [typing,    setTyping]    = useState(false)
+  const [connected, setConnected] = useState(false)
+  const [recording, setRecording] = useState(false)
+  const [preview,   setPreview]   = useState(null)
 
   const bottomRef     = useRef(null)
   const typingTimeout = useRef(null)
@@ -51,11 +52,14 @@ export default function Chat() {
     if (data.message_type === 'typing' && data.sender_id !== currentId) {
       setTyping(data.is_typing); return
     }
-    if (['call-offer','call-answer','ice-candidate','call-end','call-reject','call-request'].includes(data.message_type)) return
+    if (['call-offer','call-answer','ice-candidate','call-end','call-reject','call-request'].includes(data.message_type)) {
+      handleSignal(data); return
+    }
     setMessages(prev => [...prev, data])
   }, [currentId])
 
   const { send, socket } = useWebSocket(userId, onMessage)
+  const { callState, callType, caller, localVideo, remoteVideo, startCall, endCall, handleSignal } = useWebRTC(send, currentId)
 
   useEffect(() => {
     if (!token) { navigate('/login'); return }
@@ -137,7 +141,30 @@ export default function Chat() {
               : <span style={{color: connected ? '#22c55e' : '#a0a0b0'}}>{connected ? '● Online' : '○ Connecting'}</span>}
           </div>
         </div>
+        <button style={s.callBtn} onClick={() => startCall('audio')} title="Voice call">📞</button>
+        <button style={s.callBtn} onClick={() => startCall('video')} title="Video call">📹</button>
       </header>
+
+      {/* Call UI */}
+      {callState !== 'idle' && (
+        <div style={s.callOverlay}>
+          <div style={s.callBox}>
+            {callState === 'calling' && <div style={s.callStatus}>📞 Calling {otherUser?.username}…</div>}
+            {callState === 'receiving' && <div style={s.callStatus}>📞 {otherUser?.username} is calling…</div>}
+            {callState === 'active' && <div style={s.callStatus}>🟢 Call active</div>}
+            <div style={s.videoContainer}>
+              <video ref={remoteVideo} autoPlay playsInline style={s.remoteVideo}/>
+              <video ref={localVideo}  autoPlay playsInline muted style={s.localVideo}/>
+            </div>
+            <div style={s.callActions}>
+              {callState === 'receiving' && (
+                <button style={{...s.callActionBtn, background:'#22c55e'}} onClick={() => startCall(callType)}>✅ Accept</button>
+              )}
+              <button style={{...s.callActionBtn, background:'#ef4444'}} onClick={endCall}>📵 End</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Messages */}
       <div style={s.messages}>
@@ -147,7 +174,6 @@ export default function Chat() {
             <div style={s.emptyChatText}>Say hello to {otherUser?.username}!</div>
           </div>
         )}
-
         {messages.map((msg, i) => {
           const mine = isMine(msg)
           const type = msg.message_type || 'text'
@@ -163,12 +189,7 @@ export default function Chat() {
                 {!mine && showAvatar && <div style={s.senderName}>{getName(msg)}</div>}
                 <div style={{ ...s.bubble, ...(mine ? s.mineBubble : s.theirsBubble) }}>
                   {type === 'image' && (
-                    <img
-                      src={msg.file || msg.file_url}
-                      style={s.imgMsg}
-                      alt="img"
-                      onClick={() => setPreview(msg.file || msg.file_url)}
-                    />
+                    <img src={msg.file || msg.file_url} style={s.imgMsg} alt="img" onClick={() => setPreview(msg.file || msg.file_url)}/>
                   )}
                   {type === 'voice' && (
                     <audio controls src={msg.file || msg.file_url} style={s.audioMsg}/>
@@ -183,7 +204,6 @@ export default function Chat() {
             </div>
           )
         })}
-
         {typing && (
           <div style={{ ...s.row, justifyContent:'flex-start' }}>
             <div style={{ width:32, flexShrink:0 }}><Avatar name={otherUser?.username} size={32}/></div>
@@ -197,28 +217,16 @@ export default function Chat() {
       <div style={s.inputBar}>
         <button style={s.iconBtn} onClick={() => fileRef.current.click()} title="Send photo">📷</button>
         <input ref={fileRef} type="file" accept="image/*" style={{display:'none'}} onChange={sendPhoto}/>
-        <button
-          style={{ ...s.iconBtn, ...(recording ? s.iconBtnRed : {}) }}
+        <button style={{ ...s.iconBtn, ...(recording ? s.iconBtnRed : {}) }}
           onMouseDown={startRecord} onMouseUp={stopRecord}
-          onTouchStart={startRecord} onTouchEnd={stopRecord}
-          title="Hold to record"
-        >🎤</button>
+          onTouchStart={startRecord} onTouchEnd={stopRecord} title="Hold to record">🎤</button>
         <div style={s.inputWrap}>
-          <input
-            style={s.input}
-            value={text}
-            onChange={handleInput}
-            onKeyDown={e => e.key === 'Enter' && sendText()}
-            placeholder="Type a message…"
-          />
+          <input style={s.input} value={text} onChange={handleInput}
+            onKeyDown={e => e.key === 'Enter' && sendText()} placeholder="Type a message…"/>
         </div>
-        <button
-          style={{ ...s.sendBtn, opacity: text.trim() ? 1 : 0.5 }}
-          onClick={sendText}
-        >➤</button>
+        <button style={{ ...s.sendBtn, opacity: text.trim() ? 1 : 0.5 }} onClick={sendText}>➤</button>
       </div>
 
-      {/* Image preview modal */}
       {preview && (
         <div style={s.modal} onClick={() => setPreview(null)}>
           <img src={preview} style={s.modalImg} alt="preview"/>
@@ -230,33 +238,42 @@ export default function Chat() {
 }
 
 const s = {
-  page:         { display:'flex', flexDirection:'column', height:'100vh', background:'#f0f2f8', fontFamily:'system-ui,sans-serif' },
-  header:       { display:'flex', alignItems:'center', gap:'12px', padding:'12px 16px', background:'#fff', borderBottom:'1px solid #eee', boxShadow:'0 1px 8px rgba(0,0,0,.06)', flexShrink:0, zIndex:10 },
-  backBtn:      { background:'none', border:'none', fontSize:'20px', cursor:'pointer', color:'#6c63ff', padding:'4px 8px', borderRadius:'8px' },
-  headerInfo:   { flex:1 },
-  headerName:   { fontSize:'16px', fontWeight:'700', color:'#1a1a2e' },
-  headerStatus: { fontSize:'12px', marginTop:'1px' },
-  messages:     { flex:1, overflowY:'auto', padding:'16px', display:'flex', flexDirection:'column', gap:'4px' },
-  emptyChat:    { margin:'auto', textAlign:'center' },
-  emptyChatIcon:{ fontSize:'48px', marginBottom:'12px' },
-  emptyChatText:{ color:'#a0a0b0', fontSize:'15px' },
-  row:          { display:'flex', alignItems:'flex-end', gap:'8px', marginBottom:'2px' },
-  senderName:   { fontSize:'12px', color:'#6b6b80', marginBottom:'4px', marginLeft:'4px' },
-  bubble:       { padding:'10px 14px', borderRadius:'18px', maxWidth:'100%' },
-  mineBubble:   { background:'linear-gradient(135deg,#6c63ff,#764ba2)', color:'#fff', borderBottomRightRadius:'4px', boxShadow:'0 2px 8px rgba(108,99,255,.3)' },
-  theirsBubble: { background:'#fff', color:'#1a1a2e', borderBottomLeftRadius:'4px', boxShadow:'0 1px 4px rgba(0,0,0,.08)' },
-  msgText:      { fontSize:'15px', lineHeight:'1.45', wordBreak:'break-word' },
-  time:         { fontSize:'11px', marginTop:'4px', textAlign:'right', display:'flex', alignItems:'center', justifyContent:'flex-end', gap:'4px' },
-  tick:         { fontSize:'12px' },
-  imgMsg:       { maxWidth:'220px', maxHeight:'220px', borderRadius:'12px', display:'block', cursor:'pointer' },
-  audioMsg:     { maxWidth:'220px', borderRadius:'8px' },
-  inputBar:     { display:'flex', alignItems:'center', gap:'8px', padding:'10px 14px', background:'#fff', borderTop:'1px solid #eee', flexShrink:0 },
-  iconBtn:      { background:'#f5f5fa', border:'none', borderRadius:'50%', width:'42px', height:'42px', fontSize:'18px', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, transition:'background .15s' },
-  iconBtnRed:   { background:'#fee2e2', animation:'pulse 1s infinite' },
-  inputWrap:    { flex:1 },
-  input:        { width:'100%', padding:'11px 18px', border:'1.5px solid #e8e8f0', borderRadius:'24px', fontSize:'15px', outline:'none', background:'#f9f9fc', transition:'border-color .2s' },
-  sendBtn:      { background:'linear-gradient(135deg,#6c63ff,#764ba2)', color:'#fff', border:'none', borderRadius:'50%', width:'44px', height:'44px', fontSize:'18px', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, boxShadow:'0 2px 8px rgba(108,99,255,.3)', transition:'opacity .2s' },
-  modal:        { position:'fixed', inset:0, background:'rgba(0,0,0,.88)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 },
-  modalImg:     { maxWidth:'90vw', maxHeight:'90vh', borderRadius:'12px', boxShadow:'0 20px 60px rgba(0,0,0,.5)' },
-  modalClose:   { position:'absolute', top:'20px', right:'24px', background:'rgba(255,255,255,.15)', border:'none', color:'#fff', fontSize:'20px', width:'40px', height:'40px', borderRadius:'50%', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' },
+  page:          { display:'flex', flexDirection:'column', height:'100vh', background:'#f0f2f8', fontFamily:'system-ui,sans-serif' },
+  header:        { display:'flex', alignItems:'center', gap:'12px', padding:'12px 16px', background:'#fff', borderBottom:'1px solid #eee', boxShadow:'0 1px 8px rgba(0,0,0,.06)', flexShrink:0, zIndex:10 },
+  backBtn:       { background:'none', border:'none', fontSize:'20px', cursor:'pointer', color:'#6c63ff', padding:'4px 8px', borderRadius:'8px' },
+  callBtn:       { background:'#f0f0ff', border:'none', borderRadius:'50%', width:'40px', height:'40px', fontSize:'18px', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' },
+  headerInfo:    { flex:1 },
+  headerName:    { fontSize:'16px', fontWeight:'700', color:'#1a1a2e' },
+  headerStatus:  { fontSize:'12px', marginTop:'1px' },
+  callOverlay:   { position:'fixed', inset:0, background:'rgba(0,0,0,.85)', zIndex:100, display:'flex', alignItems:'center', justifyContent:'center' },
+  callBox:       { background:'#1a1a2e', borderRadius:'24px', padding:'32px', width:'90%', maxWidth:'500px', textAlign:'center' },
+  callStatus:    { color:'#fff', fontSize:'20px', fontWeight:'700', marginBottom:'20px' },
+  videoContainer:{ position:'relative', width:'100%', aspectRatio:'16/9', background:'#000', borderRadius:'16px', overflow:'hidden', marginBottom:'20px' },
+  remoteVideo:   { width:'100%', height:'100%', objectFit:'cover' },
+  localVideo:    { position:'absolute', bottom:'12px', right:'12px', width:'120px', borderRadius:'12px', border:'2px solid #fff' },
+  callActions:   { display:'flex', gap:'16px', justifyContent:'center' },
+  callActionBtn: { border:'none', borderRadius:'50px', padding:'12px 28px', color:'#fff', fontSize:'16px', fontWeight:'700', cursor:'pointer' },
+  messages:      { flex:1, overflowY:'auto', padding:'16px', display:'flex', flexDirection:'column', gap:'4px' },
+  emptyChat:     { margin:'auto', textAlign:'center' },
+  emptyChatIcon: { fontSize:'48px', marginBottom:'12px' },
+  emptyChatText: { color:'#a0a0b0', fontSize:'15px' },
+  row:           { display:'flex', alignItems:'flex-end', gap:'8px', marginBottom:'2px' },
+  senderName:    { fontSize:'12px', color:'#6b6b80', marginBottom:'4px', marginLeft:'4px' },
+  bubble:        { padding:'10px 14px', borderRadius:'18px', maxWidth:'100%' },
+  mineBubble:    { background:'linear-gradient(135deg,#6c63ff,#764ba2)', color:'#fff', borderBottomRightRadius:'4px', boxShadow:'0 2px 8px rgba(108,99,255,.3)' },
+  theirsBubble:  { background:'#fff', color:'#1a1a2e', borderBottomLeftRadius:'4px', boxShadow:'0 1px 4px rgba(0,0,0,.08)' },
+  msgText:       { fontSize:'15px', lineHeight:'1.45', wordBreak:'break-word' },
+  time:          { fontSize:'11px', marginTop:'4px', textAlign:'right', display:'flex', alignItems:'center', justifyContent:'flex-end', gap:'4px' },
+  tick:          { fontSize:'12px' },
+  imgMsg:        { maxWidth:'220px', maxHeight:'220px', borderRadius:'12px', display:'block', cursor:'pointer' },
+  audioMsg:      { maxWidth:'220px', borderRadius:'8px' },
+  inputBar:      { display:'flex', alignItems:'center', gap:'8px', padding:'10px 14px', background:'#fff', borderTop:'1px solid #eee', flexShrink:0 },
+  iconBtn:       { background:'#f5f5fa', border:'none', borderRadius:'50%', width:'42px', height:'42px', fontSize:'18px', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
+  iconBtnRed:    { background:'#fee2e2' },
+  inputWrap:     { flex:1 },
+  input:         { width:'100%', padding:'11px 18px', border:'1.5px solid #e8e8f0', borderRadius:'24px', fontSize:'15px', outline:'none', background:'#f9f9fc' },
+  sendBtn:       { background:'linear-gradient(135deg,#6c63ff,#764ba2)', color:'#fff', border:'none', borderRadius:'50%', width:'44px', height:'44px', fontSize:'18px', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
+  modal:         { position:'fixed', inset:0, background:'rgba(0,0,0,.88)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 },
+  modalImg:      { maxWidth:'90vw', maxHeight:'90vh', borderRadius:'12px' },
+  modalClose:    { position:'absolute', top:'20px', right:'24px', background:'rgba(255,255,255,.15)', border:'none', color:'#fff', fontSize:'20px', width:'40px', height:'40px', borderRadius:'50%', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' },
 }
